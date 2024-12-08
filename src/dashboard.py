@@ -6,14 +6,16 @@ import dash_table
 import plotly.express as px
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans, DBSCAN
+import numpy as np
 
 """
 Author: Sergeev Egor
 Written in the last minute so some analysis could be not as consice as it should.
 """
 
-df = pd.read_csv("../data/imdb_processed.tsv", sep="\t")
-budget_summary = df["budget"].describe()
+df = pd.read_csv("data/imdb_processed.tsv", sep="\t")
+gross_summary = df["gross"].describe()
 
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -37,28 +39,28 @@ app.layout = dbc.Container([
 
                     dcc.Tab(label="Full Dataset", children=[
                         html.Div([
-                            html.P("This tab shows the full dataset in an interactive table."),
+                            html.P("Feel free to explore the dataset below"),
                             html.Div(id="reactive-table")
                         ])
                     ]),
 
-                    dcc.Tab(label="Variable Visualisation", children=[
+                    dcc.Tab(label="Per variable visualisation", children=[
                         html.Div([
-                            html.P("Select a variable to visualize."),
+                            html.P("Please select a variable:"),
                             dcc.Dropdown(
                                 id="variable-dropdown",
                                 options=[
                                     {"label": "Year", "value": "year"},
                                     {"label": "Runtime", "value": "runtime"},
-                                    {"label": "Budget", "value": "budget"},
+                                    {"label": "gross", "value": "gross"},
                                     {"label": "IMDB Score", "value": "imdb"},
-                                    {"label": "Metacritic Score", "value": "metascore"},
+                                    {"label": "Meta Score", "value": "metascore"},
                                 ],
-                                value="year",  # Default value
-                                multi=False  # Single selection
+                                value="year",  
+                                multi=False 
                             ),
                             html.Div([
-                                dcc.Graph(id="variable-visualization")  # This will display the selected plot
+                                dcc.Graph(id="variable-visualization")
                             ])
                         ])
                     ])
@@ -71,20 +73,19 @@ app.layout = dbc.Container([
                 html.H2("PCA Analysis"),
                 html.P(
                     "PCA helps identify principal groups of variables and their contribution to the dataset's variability. "
-                    "Below are two PCA analyses: one using all variables and another using a subset of variables."
+                    "Below are two PCA analyses: one using all variables and another using a subset."
                 ),
 
-                # Subtabs for the PCA analysis
                 dcc.Tabs([
-                    # First Sub-tab: PCA on specific columns
                     dcc.Tab(label="PCA on all data", children=[
+                        html.P("All variables create a chaotic spread"),
                         html.Div([
-                            # Graph for PCA (we will populate this with the backend)
                             dcc.Graph(id="pca-graph")
                         ])
                     ]),
 
                     dcc.Tab(label="PCA2 - Reduced", children=[
+                        html.P("While reducing the size of the variables gives a more concise result"),
                         html.Div([
                             dcc.Graph(id="pca-reduced-1")
                         ])
@@ -93,10 +94,24 @@ app.layout = dbc.Container([
             ])
         ]),
 
-        # Third Tab: Classification
         dcc.Tab(label="Classification", children=[
             html.Div([
                 html.H2("Clustering Analysis"),
+                html.P("Below are clustering analyses using KMeans and DBSCAN."),
+
+                dcc.Tabs([
+                    dcc.Tab(label="KMeans Clustering", children=[
+                        html.Div([
+                            dcc.Graph(id="kmeans-graph") 
+                        ])
+                    ]),
+
+                    dcc.Tab(label="DBSCAN Clustering", children=[
+                        html.Div([
+                            dcc.Graph(id="dbscan-graph")  
+                        ])
+                    ])
+                ])
             ])
         ])
     ]),
@@ -108,7 +123,9 @@ app.layout = dbc.Container([
     [Output("reactive-table", "children"),
      Output("variable-visualization", "figure"),
      Output("pca-graph", "figure"),
-     Output("pca-reduced-1", "figure")],
+     Output("pca-reduced-1", "figure"),
+     Output("kmeans-graph", "figure"),
+     Output("dbscan-graph", "figure")],
     Input("variable-dropdown", "value")
 )
 
@@ -129,12 +146,16 @@ def display_reactive_table(selected_variable):
     
     fig = update_graph(selected_variable)
 
-    pca_fig = perform_pca_2(["year", "budget", "runtime", "imdb", "metascore"])
+    pca_fig = perform_pca(["year", "gross", "runtime", "imdb", "metascore"])
 
-    pca_reduced_1 = perform_pca_3(["budget", "imdb", "votes", "runtime"])
+    pca_reduced_1 = perform_pca(["gross", "runtime", "imdb", "metascore"])
+
+    kmeans_fig = perform_kmeans_clustering(["gross", "runtime", "imdb", "metascore"])
 
 
-    return table, fig, pca_fig , pca_reduced_1 
+    dbscan_fig = perform_dbscan_clustering(["year", "genre_num"])
+
+    return table, fig, pca_fig , pca_reduced_1 , kmeans_fig, dbscan_fig
 
 def update_graph(selected_variable):
 
@@ -145,9 +166,9 @@ def update_graph(selected_variable):
     elif selected_variable == "runtime":
         fig = px.histogram(df, x="runtime", nbins=30,
                             title="Histogram of Movies by Runtime")
-    elif selected_variable == "budget":
-        fig = px.histogram(df, x="budget", nbins=100,
-                            title="Histogram of Movies by Budget")
+    elif selected_variable == "gross":
+        fig = px.histogram(df, x="gross", nbins=100,
+                            title="Histogram of Movies by Income")
     elif selected_variable == "imdb":
         fig = px.histogram(df, x="imdb", nbins=18,
                             title="Histogram of Movies by IMDB Score")
@@ -156,7 +177,7 @@ def update_graph(selected_variable):
                             title="Histogram of Movies by Metacritic Score")
     return fig
 
-def perform_pca_3(cols):
+def perform_pca(cols):
 
     pca_data = df[cols]
 
@@ -175,20 +196,35 @@ def perform_pca_3(cols):
 
     return fig
 
-def perform_pca_2(cols):
+def perform_kmeans_clustering(columns):
 
-    pca_data = df[cols]
+    clustering_data = df[columns]
+
+    clustering_data = clustering_data.dropna()
 
     scaler = StandardScaler()
-    pca_data_scaled = scaler.fit_transform(pca_data)
-    pca = PCA(n_components=2) 
-    pca_result = pca.fit_transform(pca_data_scaled)
-    pca_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2'])
+    clustering_data_scaled = scaler.fit_transform(clustering_data)
 
-    fig = px.scatter_3d(pca_df, x='PC1', y='PC2', title="PCA: First Two Principal Components",
-                        labels={'PC1': 'PC1', 'PC2': 'PC2'})
+    kmeans = KMeans(n_clusters=3)
+    clustering_data['Cluster'] = kmeans.fit_predict(clustering_data_scaled)
+
+    fig = px.scatter(clustering_data, x=columns[0], y=columns[1], color='Cluster', title="KMeans Clustering",
+                     labels={columns[0]: columns[0], columns[1]: columns[1]})
     
+    return fig
 
+def perform_dbscan_clustering(columns):
+    clustering_data = df[columns]
+    clustering_data = clustering_data.dropna()
+    scaler = StandardScaler()
+    clustering_data_scaled = scaler.fit_transform(clustering_data)
+    dbscan = DBSCAN(eps=1.5, min_samples=5)  
+    clustering_data['Cluster'] = dbscan.fit_predict(clustering_data_scaled)
+
+
+    fig = px.scatter(clustering_data, x=columns[0], y=columns[1], color='Cluster', title="DBSCAN Clustering",
+                     labels={columns[0]: columns[0], columns[1]: columns[1]})
+    
     return fig
 
 if __name__ == "__main__":
