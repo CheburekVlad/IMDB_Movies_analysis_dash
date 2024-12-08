@@ -1,6 +1,8 @@
 # IMDB_Movies_analysis_dash
 Studies project for movie analysis
 
+Preprocessing was done via `src/preprocessing.R`
+
 In order to visualize the dashboard conda is needed to ensure the correct work of all depndecies:
 `apt install conda` (or check official documentation: [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
 
