@@ -8,10 +8,11 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans, DBSCAN
 import numpy as np
+from math import log10
 
 """
 Author: Sergeev Egor
-Written in the last minute so some analysis could be not as consice as it should.
+Written in a hurry so some analysis could be not as consice as it should.
 """
 
 df = pd.read_csv("data/imdb_processed.tsv", sep="\t")
@@ -32,8 +33,8 @@ app.layout = dbc.Container([
     dcc.Tabs([
         dcc.Tab(label="Preprocessing and data visualisation", children=[
             html.Div([
-                html.H1("Raw data visualisation"),
-                html.P("This section provides data visualisation and summary per variable"),
+                html.H2("Raw data visualisation"),
+                dcc.Markdown("This section provides data visualisation and summary per variable"),
 
                 dcc.Tabs([
 
@@ -78,18 +79,25 @@ app.layout = dbc.Container([
 
                 dcc.Tabs([
                     dcc.Tab(label="PCA on all data", children=[
-                        html.P("All variables create a chaotic spread"),
+                        dcc.Markdown("All variables create a chaotic spread"),
                         html.Div([
                             dcc.Graph(id="pca-graph")
+                        ]),
+                        html.Div([
+                            dcc.Graph(id="pca-hist")
                         ])
                     ]),
 
                     dcc.Tab(label="PCA2 - Reduced", children=[
-                        html.P("While reducing the size of the variables gives a more concise result"),
+                        dcc.Markdown("While reducing the size of the variables keeping only Gross, Number of votes, title_length and runtime gives a more concise result"),
                         html.Div([
                             dcc.Graph(id="pca-reduced-1")
+                        ]),
+                        html.Div([
+                            dcc.Graph(id="pca-reduced-hist")
                         ])
-                    ])
+                    ]),
+                    
                 ])
             ])
         ]),
@@ -97,22 +105,36 @@ app.layout = dbc.Container([
         dcc.Tab(label="Classification", children=[
             html.Div([
                 html.H2("Clustering Analysis"),
-                html.P("Below are clustering analyses using KMeans and DBSCAN."),
+                dcc.Markdown("Below are clustering analyses using KMeans and DBSCAN."),
 
                 dcc.Tabs([
                     dcc.Tab(label="KMeans Clustering", children=[
                         html.Div([
+                            dcc.Markdown("Classification of the data in K = 4 clusters shows the following result:"),
                             dcc.Graph(id="kmeans-graph") 
                         ])
                     ]),
 
                     dcc.Tab(label="DBSCAN Clustering", children=[
                         html.Div([
+                            html.P("With the values of eps=0.6 and min_samples=5 these are DBSCAN clustering results:"),
                             dcc.Graph(id="dbscan-graph")  
                         ])
                     ])
                 ])
             ])
+        ]),
+        dcc.Tab(label="Result", children=[
+            dcc.Markdown("""
+                Analysis of the top 1000 IMDB films filtered to 750 has enabled me to identify four classes of film based on user votes, gross revenue and running time:\n
+
+                1. **Non-popular films**: very low number of votes, very low gross receipts, generally short, low-budget, niche films or amateur films that seems to be easy-to-make.\n
+                2. **Popular films**: lots of votes, high gross receipts, basically 2h-2h30 of screentime, very popular blockbusters.\n
+                3. **Long, unpopular films**: high volume of Hours (2h30+), leads to average gross receipts, long but unpopular films.\n
+                4. **Films in the middle of the film revenue scale**: slightly above average, not very “long”, not very “popular”.\n
+
+                In the analysis DBSCAN shows rather poorer results than K -means. Probably due to the many outliers present, which it was not able to deal with to any great extent. \n
+            """)
         ])
     ]),
     html.P("Sergeev Egor",style={
@@ -123,7 +145,9 @@ app.layout = dbc.Container([
     [Output("reactive-table", "children"),
      Output("variable-visualization", "figure"),
      Output("pca-graph", "figure"),
+     Output("pca-hist", "figure"),
      Output("pca-reduced-1", "figure"),
+     Output("pca-reduced-hist", "figure"),
      Output("kmeans-graph", "figure"),
      Output("dbscan-graph", "figure")],
     Input("variable-dropdown", "value")
@@ -146,16 +170,16 @@ def display_reactive_table(selected_variable):
     
     fig = update_graph(selected_variable)
 
-    pca_fig = perform_pca(["year", "gross", "runtime", "imdb", "metascore"])
+    pca_fig, hist = perform_pca(["year", "gross", "runtime", "imdb", "metascore", "title_length", "genre_num", "votes"])
 
-    pca_reduced_1 = perform_pca(["gross", "runtime", "imdb", "metascore"])
+    pca_reduced_1 , hist_reduced = perform_pca(["gross", "votes", "title_length", "runtime"])
 
-    kmeans_fig = perform_kmeans_clustering(["gross", "runtime", "imdb", "metascore"])
+    kmeans_fig = perform_kmeans_clustering(["votes", "gross", "runtime"])
 
 
-    dbscan_fig = perform_dbscan_clustering(["year", "genre_num"])
+    dbscan_fig = perform_dbscan_clustering(["votes", "gross", "runtime"])
 
-    return table, fig, pca_fig , pca_reduced_1 , kmeans_fig, dbscan_fig
+    return table, fig, pca_fig, hist, pca_reduced_1, hist_reduced , kmeans_fig, dbscan_fig
 
 def update_graph(selected_variable):
 
@@ -180,52 +204,81 @@ def update_graph(selected_variable):
 def perform_pca(cols):
 
     pca_data = df[cols]
-
+    
+    pca_data = pca_data.dropna()
+    
     scaler = StandardScaler()
     pca_data_scaled = scaler.fit_transform(pca_data)
-    pca = PCA(n_components=3) 
+    
+    pca = PCA(n_components=4)
     pca_result = pca.fit_transform(pca_data_scaled)
-    pca_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2', 'PC3'])
+    
+    explained_variance = pca.explained_variance_ratio_
+    if len(explained_variance) < 4:  
+        explained_variance = list(explained_variance) + [0] * (4 - len(explained_variance))
+    
+    explained_variance_df = pd.DataFrame({
+        'Principal Component': [f"PC{i+1}" for i in range(len(explained_variance))],
+        'Explained Variance': explained_variance
+    })
 
-    fig = px.scatter_3d(pca_df, x='PC1', y='PC2', z='PC3', title="PCA: First Three Principal Components",
-                        labels={'PC1': 'PC1', 'PC2': 'PC2', 'PC3': 'PC3'})
-    fig.update_traces(marker=dict(size=5, opacity=0.7)).update_layout(
-                                                            width=1200, 
-                                                            height=800, 
-                                                            title='PCA: First Three Principal Components')
 
-    return fig
+    pca_df = pd.DataFrame(data=pca_result, columns=['PC1', 'PC2', 'PC3', 'PC4'])
+    scatter_fig = px.scatter_3d(
+        pca_df, x='PC1', y='PC2', z='PC3',
+        title="PCA: First Three Principal Components",
+        labels={'PC1': 'PC1', 'PC2': 'PC2', 'PC3': 'PC3'}
+    )
+    scatter_fig.update_traces(marker=dict(size=5, opacity=0.7)).update_layout(width=1200, height=800)
+
+    histogram_fig = px.bar(
+        explained_variance_df,
+        x='Principal Component',
+        y='Explained Variance',
+        title="Eigen Values of the First 4 Principal Components",
+        labels={'Explained Variance': 'Eigen Values'},
+    )
+    histogram_fig.update_layout(width=800, height=500)
+
+    return scatter_fig, histogram_fig
 
 def perform_kmeans_clustering(columns):
-
     clustering_data = df[columns]
-
-    clustering_data = clustering_data.dropna()
-
+    if "gross" in clustering_data:
+        clustering_data['gross'] = np.log10(pd.to_numeric(clustering_data['gross']))
     scaler = StandardScaler()
     clustering_data_scaled = scaler.fit_transform(clustering_data)
-
-    kmeans = KMeans(n_clusters=3)
+    kmeans = KMeans(n_clusters=4)
     clustering_data['Cluster'] = kmeans.fit_predict(clustering_data_scaled)
-
-    fig = px.scatter(clustering_data, x=columns[0], y=columns[1], color='Cluster', title="KMeans Clustering",
-                     labels={columns[0]: columns[0], columns[1]: columns[1]})
-    
+    fig = px.scatter_3d(clustering_data, x=columns[0], y=columns[1], z=columns[2], color='Cluster', 
+                        title="KMeans Clustering",
+                        labels={columns[0]: columns[0], columns[1]: columns[1], columns[2]: columns[2]})
+    fig.update_traces(marker=dict(size=5, opacity=0.7)).update_layout(width=1200, height=800)
     return fig
+
 
 def perform_dbscan_clustering(columns):
+
     clustering_data = df[columns]
+    if "gross" in clustering_data:
+        clustering_data['gross'] = np.log10(pd.to_numeric(clustering_data['gross']))
+
     clustering_data = clustering_data.dropna()
+    
     scaler = StandardScaler()
     clustering_data_scaled = scaler.fit_transform(clustering_data)
-    dbscan = DBSCAN(eps=1.5, min_samples=5)  
-    clustering_data['Cluster'] = dbscan.fit_predict(clustering_data_scaled)
-
-
-    fig = px.scatter(clustering_data, x=columns[0], y=columns[1], color='Cluster', title="DBSCAN Clustering",
-                     labels={columns[0]: columns[0], columns[1]: columns[1]})
     
+    # Estimated with kNN via dbscan library in R
+    dbscan = DBSCAN(eps=0.6, min_samples=5)
+    clustering_data['Cluster'] = dbscan.fit_predict(clustering_data_scaled)
+    
+
+    fig = px.scatter_3d(clustering_data, x=columns[0], y=columns[1], z=columns[2], color='Cluster', 
+                        title="DBSCAN Clustering",
+                        labels={columns[0]: columns[0], columns[1]: columns[1], columns[2]: columns[2]})
+    fig.update_traces(marker=dict(size=5, opacity=0.7)).update_layout(width=1200, height=800)
     return fig
+
 
 if __name__ == "__main__":
     app.run_server(debug=True, port=8080)
